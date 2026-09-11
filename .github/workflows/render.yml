@@ -1,0 +1,173 @@
+name: Собрать ролик
+
+# Запускается сам, когда на сайте нажали «Собрать»: страница кладёт
+# файл выпуска в папку «задания», и это считается сигналом к работе.
+# Руками можно запустить кнопкой Run workflow.
+#
+# Названия шагов по-русски, а вот имена работ, шагов и переменных —
+# латиницей: GitHub их читает сам и кириллицу в них не принимает.
+on:
+  push:
+    paths:
+      - "задания/**.quiz"
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "Какой выпуск собрать (пусто — самый свежий)"
+        required: false
+        default: ""
+
+# Раньше здесь стояло «строго по одной сборке»: дома две разом писали бы
+# в один Root.tsx и перемешали раунды. Но на GitHub у каждой сборки своя
+# отдельная копия проекта — мешать друг другу нечем, а запрет вредил:
+# пока шла одна, следующая ждала в очереди, и приход третьей ОТМЕНЯЛ
+# ожидающую. Так у Александра отменилась сборка №17.
+# Теперь замок только от повторного запуска одного и того же коммита.
+concurrency:
+  group: render-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    name: Сборка
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # Кладём проект в подпапку «quiz»: скрипты ищут «настройки.txt» и
+      # «Готовые видео» этажом выше, ровно как дома.
+      - name: Забрать проект
+        uses: actions/checkout@v4
+        with:
+          path: quiz
+          # Нужна история, а не один снимок: по ней видно, какой файл
+          # выпуска принёс именно этот коммит.
+          fetch-depth: 10
+
+      - name: Поставить Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: quiz/package-lock.json
+
+      # Remotion рисует кадры настоящим браузером — ему нужны системные
+      # библиотеки, которых на чистой машине нет. Имена пакетов в Ubuntu 24.04
+      # получили хвост «t64»; на случай машины постарше пробуем и старые.
+      - name: Библиотеки для браузера
+        run: |
+          sudo apt-get update -qq
+          new="libatk1.0-0t64 libasound2t64 libatk-bridge2.0-0t64 libcups2t64"
+          old="libatk1.0-0 libasound2 libatk-bridge2.0-0 libcups2"
+          common="libnss3 libdbus-1-3 libxrandr2 libxkbcommon0 libxfixes3 libxcomposite1 libxdamage1 libgbm1 libpango-1.0-0 libcairo2"
+          sudo apt-get install -y --no-install-recommends $common $new \
+            || sudo apt-get install -y --no-install-recommends $common $old
+
+      - name: Поставить зависимости
+        working-directory: quiz
+        run: npm ci
+
+      - name: Скачать браузер для Remotion
+        working-directory: quiz
+        run: npx remotion browser ensure
+
+      # Ключ живёт в секретах репозитория, а скриптам нужен файлом — тем же
+      # самым, что лежит дома рядом с кнопками, этажом выше проекта.
+      - name: Положить ключ Pexels
+        env:
+          PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
+        run: |
+          if [ -z "$PEXELS_KEY" ]; then
+            echo "::warning::Секрет PEXELS_KEY не задан — клипы со стока качаться не будут."
+            echo "Задать: Settings → Secrets and variables → Actions → New repository secret"
+          fi
+          printf '%s\n' "$PEXELS_KEY" > "ключ pexels.txt"
+
+      # САМЫЙ ВАЖНЫЙ ШАГ. Берём тот выпуск, который принёс ИМЕННО ЭТОТ
+      # коммит, а не «самый свежий файл в папке». При выгрузке на чистую
+      # машину все файлы получают одинаковое время, и «самый свежий»
+      # становится случайным — на этом подруге собрался чужой ролик.
+      - name: Найти выпуск
+        id: episode
+        run: |
+          asked="${{ github.event.inputs.file }}"
+          if [ -n "$asked" ] && [ -f "quiz/$asked" ]; then
+            echo "file=$PWD/quiz/$asked" >> "$GITHUB_OUTPUT"
+            echo "Беру заказанный: $asked"
+            exit 0
+          fi
+
+          # Что добавил или изменил этот коммит. quotepath=false обязателен:
+          # иначе git отдаёт кириллицу экранированными кодами вида
+          # "Ð·...", и поиск по имени не находит ничего.
+          mine=$(git -c core.quotepath=false -C quiz show --name-only --pretty=format: HEAD                  | grep -E '^задания/.+\.quiz$' | head -1 || true)
+          if [ -n "$mine" ] && [ -f "quiz/$mine" ]; then
+            echo "file=$PWD/quiz/$mine" >> "$GITHUB_OUTPUT"
+            echo "Беру выпуск этого коммита: $mine"
+            exit 0
+          fi
+
+          # Запустили руками — берём последний добавленный ПО ИСТОРИИ,
+          # а не по времени файла на диске.
+          latest=$(git -c core.quotepath=false -C quiz log -1 --pretty=format: --name-only --diff-filter=AM                    -- 'задания/*.quiz' | grep -E '\.quiz$' | head -1 || true)
+          if [ -z "$latest" ] || [ ! -f "quiz/$latest" ]; then
+            echo "Не понял, какой выпуск собирать: этот коммит не приносил файла,"
+            echo "и в истории «заданий» ничего не нашлось."
+            exit 1
+          fi
+          echo "file=$PWD/quiz/$latest" >> "$GITHUB_OUTPUT"
+          echo "Беру последний по истории: $latest"
+
+      - name: Собрать
+        id: build
+        working-directory: quiz
+        run: node tools/ci-render.mjs "${{ steps.episode.outputs.file }}"
+
+      - name: Отдать ролик
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rolik
+          path: ${{ steps.build.outputs.file }}
+          retention-days: 30
+          if-no-files-found: error
+
+      # Артефакт скачивается только со входом в GitHub — с телефона это
+      # неудобно. Поэтому тот же файл кладём в ОТКРЫТЫЙ репозиторий
+      # релизом: оттуда он берётся обычной ссылкой, без паролей.
+      # Сюда едет только готовый ролик; вопросы, свои фотографии и
+      # исходники остаются в закрытом.
+      - name: Выложить ролик для телефона
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          FILE: ${{ steps.build.outputs.file }}
+          NAME: ${{ steps.build.outputs.name }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::Секрет RELEASE_TOKEN не задан — ролик остался только артефактом."
+            echo "Задать: Settings → Secrets and variables → Actions → New repository secret"
+            exit 0
+          fi
+          # Метка по НОМЕРУ ЗАПУСКА (run_id), а не по порядковому номеру:
+          # порядковый свой у каждого репозитория и начинается с единицы,
+          # так что при переезде метки столкнулись бы с уже занятыми.
+          tag="r${{ github.run_id }}"
+          gh release create "$tag" "$FILE" \
+            --repo gallxxxx/tiktok-quiz-videos \
+            --title "$NAME" \
+            --notes "Собрано автоматически, запуск ${{ github.run_number }} (id ${{ github.run_id }})."
+
+      # Если сборка упала — забираем всё, что успело получиться:
+      # по данным и спискам источников понятно, где именно сломалось.
+      - name: Что успело получиться
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: razbor
+          path: |
+            quiz/src/Root.tsx
+            quiz/public/*credits*.txt
+            Готовые видео/
+          retention-days: 7
+          if-no-files-found: ignore

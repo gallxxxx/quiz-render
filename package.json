@@ -1,0 +1,48 @@
+{
+  "name": "quiz",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio --port 3010",
+    "render": "node tools/render.mjs",
+    "photos": "node tools/get-photos.mjs",
+    "voice": "node tools/make-voice-text.mjs",
+    "sounds": "node tools/make-sounds.mjs",
+    "images": "node tools/make-images.mjs",
+    "fixphotos": "node tools/fix-photos.mjs",
+    "myphotos": "node tools/import-photos.mjs",
+    "videos": "node tools/get-videos.mjs",
+    "voiceimport": "node tools/import-voice.mjs",
+    "journal": "node tools/show-journal.mjs",
+    "draft": "node tools/open-draft.mjs",
+    "batch": "node tools/make-batch.mjs",
+    "covers": "node tools/import-covers.mjs",
+    "cover": "node tools/make-cover.mjs",
+    "build": "node tools/build.mjs",
+    "voice2": "node tools/voice-make.mjs",
+    "switchvoice": "node tools/switch-voice.mjs",
+    "replace": "node tools/replace-media.mjs",
+    "preview": "node tools/preview-sheet.mjs",
+    "patchstudio": "node tools/patch-studio.mjs",
+    "phone": "node tools/phone-server.mjs",
+    "episode": "node tools/import-episode.mjs"
+  },
+  "dependencies": {
+    "@fontsource/montserrat": "^5.3.0",
+    "@remotion/cli": "^4.0.516",
+    "@remotion/transitions": "^4.0.516",
+    "@remotion/zod-types": "^4.0.516",
+    "msedge-tts": "^2.0.7",
+    "qrcode-terminal": "^0.12.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "remotion": "^4.0.516",
+    "sharp": "^0.35.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "typescript": "^7.0.2"
+  }
+}

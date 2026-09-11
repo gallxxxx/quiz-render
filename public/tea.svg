@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900">
+  <defs>
+    <linearGradient id="bg" gradientTransform="rotate(111 0.5 0.5)">
+      <stop offset="0%" stop-color="#8FCBA6"/>
+      <stop offset="100%" stop-color="#1F5A4A"/>
+    </linearGradient>
+    <radialGradient id="vig" cx="50%" cy="42%" r="72%">
+      <stop offset="55%" stop-color="#000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0.35"/>
+    </radialGradient>
+  </defs>
+  <rect width="900" height="900" fill="url(#bg)"/>
+  <circle cx="180" cy="470" r="140" fill="#EEF7EA" opacity="0.13"/><circle cx="720" cy="490" r="190" fill="#EEF7EA" opacity="0.10"/><path d="M0 640 Q 450 660 900 620 L 900 900 L 0 900 Z" fill="#1F5A4A" opacity="0.55"/><circle cx="450" cy="450" r="300" fill="none" stroke="#EEF7EA" stroke-width="3" opacity="0.22"/><circle cx="450" cy="450" r="230" fill="none" stroke="#EEF7EA" stroke-width="2" opacity="0.16"/>
+  <rect width="900" height="900" fill="url(#vig)"/>
+  <text x="450" y="854" font-family="Arial, sans-serif" font-size="26" letter-spacing="6"
+        fill="#EEF7EA" opacity="0.55" text-anchor="middle">REPLACE PHOTO</text>
+</svg>

@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Викторина — пульт</title>
+<style>
+  :root{
+    --terra:#C1613C; --terra-dark:#A44E2E; --turq:#12888A; --cream:#F7EFE4;
+    --ink:#1B1310; --gold:#E8B65F; --line:#3a2a22;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--cream);
+       font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding-bottom:96px}
+  header{position:sticky;top:0;z-index:5;background:var(--ink);
+         border-bottom:1px solid var(--line);padding:14px 16px 0}
+  h1{margin:0 0 10px;font-size:19px;letter-spacing:.3px}
+  .tabs{display:flex;gap:6px}
+  .tabs button{flex:1;padding:11px 4px;border:0;border-radius:10px 10px 0 0;
+    background:#241a15;color:#b9a08f;font-size:15px;font-weight:600}
+  .tabs button.on{background:var(--terra);color:#fff}
+  main{padding:16px}
+  section{display:none}
+  section.on{display:block}
+  label{display:block;font-size:13px;color:#b9a08f;margin:14px 0 5px}
+  input,select,textarea{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);
+    background:#241a15;color:var(--cream);font-size:16px}
+  .pair{border:1px solid var(--line);border-radius:14px;padding:12px;margin:12px 0;background:#1f1712}
+  .pair .num{font-weight:700;color:var(--gold);font-size:14px;margin-bottom:6px}
+  .row{display:flex;gap:10px;align-items:center}
+  .row input[type=range]{flex:1}
+  .pct{width:74px;text-align:center;color:var(--gold);font-weight:700}
+  button.big{width:100%;padding:16px;border:0;border-radius:14px;font-size:17px;font-weight:700;
+    background:var(--terra);color:#fff;margin-top:14px}
+  button.ghost{background:#241a15;color:var(--cream);border:1px solid var(--line)}
+  button.turq{background:var(--turq)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .cell{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#241a15;
+        text-align:left;padding:0;color:var(--cream)}
+  .cell img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#2c201a}
+  .cell .cap{padding:8px 10px;font-size:13px;display:flex;gap:6px;align-items:baseline}
+  .cell .cap b{color:var(--gold)}
+  .muted{color:#b9a08f;font-size:14px}
+  .log{background:#120d0b;border:1px solid var(--line);border-radius:12px;padding:10px;
+       font:12px/1.5 ui-monospace,Consolas,monospace;color:#cdbba9;white-space:pre-wrap;
+       max-height:220px;overflow:auto;margin-top:12px}
+  .bar{position:fixed;left:0;right:0;bottom:0;background:#241a15;border-top:1px solid var(--line);
+       padding:10px 16px calc(10px + env(safe-area-inset-bottom));font-size:14px;display:none}
+  .bar.on{display:block}
+  .vid{display:flex;justify-content:space-between;align-items:center;gap:10px;
+       border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px}
+  .vid a{color:var(--gold);font-weight:700;text-decoration:none}
+  dialog{border:0;border-radius:16px;background:#241a15;color:var(--cream);width:86%;max-width:420px}
+  dialog h3{margin:0 0 12px;font-size:17px}
+  .hint{font-size:13px;color:#b9a08f;margin-top:6px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Викторина «это или то»</h1>
+  <div class="tabs">
+    <button data-tab="q" class="on">Вопросы</button>
+    <button data-tab="p">Картинки</button>
+    <button data-tab="v">Готово</button>
+  </div>
+</header>
+
+<main>
+  <section id="q" class="on">
+    <label>Фраза на заставке</label>
+    <input id="hook" placeholder="IF IT WAS FREE, WHAT WOULD YOU EAT?">
+    <label>Тема выпуска</label>
+    <input id="edition" placeholder="FOOD EDITION">
+    <div class="hint">Пиши по-английски: зрители англоязычные, и по этим же словам ищутся картинки.</div>
+    <div id="pairs"></div>
+    <button class="big ghost" id="addPair">+ ещё вопрос</button>
+    <button class="big ghost" id="save">Сохранить вопросы</button>
+    <button class="big turq" id="doAll">СДЕЛАТЬ РОЛИК ЦЕЛИКОМ</button>
+    <div class="hint">Сохранит вопросы, подберёт картинки, озвучит и соберёт видео.
+    Минут семь. Можно закрыть страницу и вернуться — работа не прервётся.</div>
+  </section>
+
+  <section id="p">
+    <label>Что ставить в кадр</label>
+    <select id="mode">
+      <option value="фото">фотографии из интернета</option>
+      <option value="видео">видеоклипы со стока</option>
+      <option value="свое">только мои файлы</option>
+    </select>
+    <label>План съёмки</label>
+    <select id="shot">
+      <option value="крупный">крупный — еда, предметы, цветы</option>
+      <option value="общий">общий — города, природа, машины, животные</option>
+    </select>
+    <button class="big turq" id="findAll">Подобрать картинки на весь ролик</button>
+    <div class="hint">Минуты три. Потом нажимай на любую картинку, чтобы поменять её.</div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <section id="v">
+    <label>Голос диктора</label>
+    <select id="voice"></select>
+    <div class="row" style="margin-top:10px">
+      <input type="checkbox" id="voiceOn" style="width:22px;height:22px">
+      <span class="muted">озвучивать ролик голосом</span>
+    </div>
+    <button class="big" id="build">Собрать ролик</button>
+    <div class="hint">Сначала запишет голос, потом соберёт видео. Минуты четыре.</div>
+    <div id="videos"></div>
+  </section>
+
+  <div class="log" id="log" hidden></div>
+</main>
+
+<div class="bar" id="bar"></div>
+
+<dialog id="pick">
+  <h3 id="pickTitle">Что сделать?</h3>
+  <button class="big turq" id="pickSearch">Поискать другую картинку</button>
+  <button class="big ghost" id="pickUpload">Загрузить с телефона</button>
+  <button class="big ghost" id="pickClose">Отмена</button>
+</dialog>
+
+<dialog id="codeBox">
+  <h3>Код с экрана компьютера</h3>
+  <input id="codeInput" inputmode="numeric" maxlength="4" placeholder="4 цифры">
+  <button class="big" id="codeOk">Войти</button>
+  <div class="hint">Код напечатан в чёрном окне на компьютере.</div>
+</dialog>
+
+<input type="file" id="file" accept="image/*,video/*" hidden>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// Код может прийти прямо в адресе — так его подставляет QR из окна
+// на компьютере, и на телефоне не надо набирать вообще ничего.
+const fromUrl = new URLSearchParams(location.search).get("code");
+if (fromUrl) localStorage.setItem("quiz-code", fromUrl.trim());
+let CODE = fromUrl ? fromUrl.trim() : localStorage.getItem("quiz-code") || "";
+let DATA = null;
+let picked = 0;
+
+const api = async (path, body) => {
+  const opts = { headers: { "x-code": CODE } };
+  if (body !== undefined) {
+    opts.method = "POST";
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (res.status === 403) {
+    localStorage.removeItem("quiz-code");
+    askCode();
+    throw new Error("код не подошёл");
+  }
+  return res.json();
+};
+
+const askCode = () => {
+  const box = document.getElementById("codeBox");
+  if (!box.open) box.showModal();
+};
+
+document.getElementById("codeOk").addEventListener("click", () => {
+  const code = document.getElementById("codeInput").value.trim();
+  if (!code) return;
+  CODE = code;
+  localStorage.setItem("quiz-code", CODE);
+  document.getElementById("codeBox").close();
+  load();
+});
+
+// ——— вопросы ———
+const drawPairs = () => {
+  const box = $("pairs");
+  box.innerHTML = "";
+  DATA.rounds.forEach((r, i) => {
+    const el = document.createElement("div");
+    el.className = "pair";
+    el.innerHTML =
+      '<div class="num">Вопрос ' + (i + 1) + "</div>" +
+      '<input data-i="' + i + '" data-side="top" value="" placeholder="сверху">' +
+      '<div style="height:8px"></div>' +
+      '<input data-i="' + i + '" data-side="bottom" value="" placeholder="снизу">' +
+      '<div class="row" style="margin-top:10px">' +
+      '<input type="range" min="20" max="80" value="' + r.topPercent + '" data-i="' + i + '" data-pct="1">' +
+      '<div class="pct">' + r.topPercent + " / " + (100 - r.topPercent) + "</div></div>";
+    box.appendChild(el);
+    el.querySelector('[data-side="top"]').value = r.top.label;
+    el.querySelector('[data-side="bottom"]').value = r.bottom.label;
+    el.querySelector("[data-pct]").addEventListener("input", (e) => {
+      const v = Number(e.target.value);
+      el.querySelector(".pct").textContent = v + " / " + (100 - v);
+    });
+  });
+};
+
+const collect = () => ({
+  intro: { hook: $("hook").value, edition: $("edition").value },
+  rounds: [...document.querySelectorAll("#pairs .pair")].map((el) => ({
+    top: { label: el.querySelector('[data-side="top"]').value },
+    bottom: { label: el.querySelector('[data-side="bottom"]').value },
+    topPercent: Number(el.querySelector("[data-pct]").value),
+  })),
+});
+
+// ——— картинки ———
+const drawGrid = () => {
+  const box = $("grid");
+  box.innerHTML = "";
+  DATA.slots.forEach((s) => {
+    const cell = document.createElement("button");
+    cell.className = "cell";
+    cell.innerHTML =
+      '<img src="/thumb/' + s.n + ".jpg?code=" + CODE + "&t=" + Date.now() + '" alt="">' +
+      '<div class="cap"><b>' + s.n + "</b><span>" + s.label + "</span></div>";
+    cell.addEventListener("click", () => {
+      picked = s.n;
+      $("pickTitle").textContent = s.n + ". " + s.label;
+      $("pick").showModal();
+    });
+    box.appendChild(cell);
+  });
+};
+
+const drawVideos = () => {
+  const box = $("videos");
+  box.innerHTML = "";
+  if (!DATA.videos.length) {
+    box.innerHTML = '<div class="hint">Готовых роликов пока нет.</div>';
+    return;
+  }
+  DATA.videos.forEach((v) => {
+    const el = document.createElement("div");
+    el.className = "vid";
+    el.innerHTML =
+      "<div><div>" + v.name.replace(".mp4", "") + '</div><div class="muted">' + v.size + " МБ</div></div>" +
+      '<a href="/video/' + encodeURIComponent(v.name) + "?code=" + CODE + '">Скачать</a>';
+    box.appendChild(el);
+  });
+};
+
+const drawJob = () => {
+  const bar = $("bar");
+  const log = $("log");
+  if (DATA.job.running) {
+    bar.classList.add("on");
+    bar.textContent = DATA.job.name + "... " + (DATA.job.lines.slice(-1)[0] || "");
+    log.hidden = false;
+    log.textContent = DATA.job.lines.join("\n");
+    log.scrollTop = log.scrollHeight;
+  } else {
+    bar.classList.remove("on");
+    if (DATA.job.error) {
+      log.hidden = false;
+      log.textContent = DATA.job.lines.join("\n") + "\n\nНе получилось: " + DATA.job.error;
+    }
+  }
+};
+
+const load = async () => {
+  if (!CODE) return askCode();
+  DATA = await api("/api/state");
+  if (DATA.error) return;
+  $("hook").value = DATA.intro.hook || "";
+  $("edition").value = DATA.intro.edition || "";
+  $("mode").value = DATA.settings.mode;
+  $("shot").value = DATA.settings.shot;
+  $("voiceOn").checked = DATA.settings.voiceOn;
+  drawPairs();
+  drawGrid();
+  drawVideos();
+  drawJob();
+};
+
+// ——— кнопки ———
+document.querySelectorAll(".tabs button").forEach((b) => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.remove("on"));
+    document.querySelectorAll("section").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    $(b.dataset.tab).classList.add("on");
+    if (b.dataset.tab === "p") drawGrid();
+    if (b.dataset.tab === "v") loadVoices();
+  });
+});
+
+$("addPair").addEventListener("click", () => {
+  const last = DATA.rounds[DATA.rounds.length - 1];
+  DATA.rounds.push({ top: { label: "", image: "" }, bottom: { label: "", image: "" }, topPercent: 50 });
+  drawPairs();
+});
+
+$("save").addEventListener("click", async () => {
+  $("save").textContent = "Сохраняю...";
+  const answer = await api("/api/save", collect());
+  DATA = answer;
+  drawPairs();
+  drawGrid();
+  $("save").textContent = "Сохранено ✓";
+  setTimeout(() => ($("save").textContent = "Сохранить вопросы"), 1500);
+});
+
+const setSetting = async (patch) => {
+  await api("/api/settings", patch);
+};
+$("mode").addEventListener("change", () => setSetting({ mode: $("mode").value }));
+$("shot").addEventListener("change", () => setSetting({ shot: $("shot").value }));
+$("voiceOn").addEventListener("change", () => setSetting({ voiceOn: $("voiceOn").checked }));
+$("voice").addEventListener("change", () => setSetting({ voiceName: $("voice").value }));
+
+let voicesLoaded = false;
+const loadVoices = async () => {
+  if (voicesLoaded) return;
+  voicesLoaded = true;
+  const box = $("voice");
+  box.innerHTML = "<option>загружаю...</option>";
+  const answer = await api("/api/voices");
+  box.innerHTML = "";
+  (answer.voices || []).forEach((v) => {
+    const o = document.createElement("option");
+    o.value = v.short;
+    o.textContent = v.name + " — " + v.gender + ", " + v.country;
+    box.appendChild(o);
+  });
+  box.value = DATA.settings.voiceName;
+};
+
+const run = async (what, n) => {
+  const answer = await api("/api/run", { what, n });
+  if (answer.error) {
+    alert(answer.error);
+    return;
+  }
+  poll();
+};
+
+$("findAll").addEventListener("click", () => run("media"));
+
+$("doAll").addEventListener("click", async () => {
+  $("doAll").textContent = "Сохраняю...";
+  DATA = await api("/api/save", collect());
+  drawPairs();
+  $("doAll").textContent = "СДЕЛАТЬ РОЛИК ЦЕЛИКОМ";
+  await run("all");
+  const tab = document.querySelector('.tabs button[data-tab="v"]');
+  if (tab) tab.click();
+});
+$("build").addEventListener("click", () => run("build"));
+
+// ——— меню замены ———
+$("pickClose").addEventListener("click", () => $("pick").close());
+$("pickSearch").addEventListener("click", () => {
+  $("pick").close();
+  run("replace", picked);
+});
+$("pickUpload").addEventListener("click", () => {
+  $("pick").close();
+  $("file").click();
+});
+
+$("file").addEventListener("change", async () => {
+  const file = $("file").files[0];
+  if (!file) return;
+  $("bar").classList.add("on");
+  $("bar").textContent = "Отправляю фото...";
+  const buf = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buf);
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  const answer = await api("/api/photo", { n: picked, name: file.name, data: btoa(binary) });
+  $("file").value = "";
+  $("bar").classList.remove("on");
+  if (answer.error) {
+    alert("Не вышло: " + answer.error);
+    return;
+  }
+  await load();
+  drawGrid();
+});
+
+// ——— слежение за работой ———
+let timer = null;
+const poll = () => {
+  if (timer) clearInterval(timer);
+  timer = setInterval(async () => {
+    const j = await api("/api/job");
+    DATA.job = j;
+    drawJob();
+    if (!j.running) {
+      clearInterval(timer);
+      timer = null;
+      await load();
+    }
+  }, 1500);
+};
+
+load().then(() => {
+  if (DATA && DATA.job && DATA.job.running) poll();
+});
+</script>
+</body>
+</html>
