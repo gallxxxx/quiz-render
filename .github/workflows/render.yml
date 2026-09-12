@@ -97,13 +97,24 @@ jobs:
             exit 0
           fi
 
-          # Что добавил или изменил этот коммит. quotepath=false обязателен:
-          # иначе git отдаёт кириллицу экранированными кодами вида
-          # "Ð·...", и поиск по имени не находит ничего.
-          mine=$(git -c core.quotepath=false -C quiz show --name-only --pretty=format: HEAD                  | grep -E '^задания/.+\.quiz$' | head -1 || true)
+          # Что ДОБАВИЛ ИЛИ ИЗМЕНИЛ этот коммит (--diff-filter=AM: удаление
+          # сюда не попадает). quotepath=false обязателен: иначе git отдаёт
+          # кириллицу кодами вида "Ð·...", и поиск по имени не находит ничего.
+          mine=$(git -c core.quotepath=false -C quiz show --name-only --diff-filter=AM --pretty=format: HEAD                  | grep -E '^задания/.+\.quiz$' | head -1 || true)
           if [ -n "$mine" ] && [ -f "quiz/$mine" ]; then
             echo "file=$PWD/quiz/$mine" >> "$GITHUB_OUTPUT"
             echo "Беру выпуск этого коммита: $mine"
+            exit 0
+          fi
+
+          # Коммит ничего не принёс — например, УДАЛИЛ старое задание.
+          # Такой push тоже поднимает сборку, и раньше она шла дальше,
+          # к «последнему по истории», то есть собирала ЧУЖОЙ выпуск и
+          # выкладывала его релизом. Ровно так подруге однажды собрался
+          # чужой ролик. Поэтому: нечего собирать — молча выходим.
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "skip=yes" >> "$GITHUB_OUTPUT"
+            echo "Этот коммит не приносил выпуска (похоже, только удалял) — собирать нечего."
             exit 0
           fi
 
@@ -120,11 +131,12 @@ jobs:
 
       - name: Собрать
         id: build
+        if: steps.episode.outputs.skip != 'yes'
         working-directory: quiz
         run: node tools/ci-render.mjs "${{ steps.episode.outputs.file }}"
 
       - name: Отдать ролик
-        if: success()
+        if: success() && steps.episode.outputs.skip != 'yes'
         uses: actions/upload-artifact@v4
         with:
           name: rolik
@@ -138,7 +150,7 @@ jobs:
       # Сюда едет только готовый ролик; вопросы, свои фотографии и
       # исходники остаются в закрытом.
       - name: Выложить ролик для телефона
-        if: success()
+        if: success() && steps.episode.outputs.skip != 'yes'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           FILE: ${{ steps.build.outputs.file }}
@@ -152,11 +164,58 @@ jobs:
           # Метка по НОМЕРУ ЗАПУСКА (run_id), а не по порядковому номеру:
           # порядковый свой у каждого репозитория и начинается с единицы,
           # так что при переезде метки столкнулись бы с уже занятыми.
+          # Репозиторий с роликами называется «quiz». Раньше здесь стояло
+          # прежнее имя «tiktok-quiz-videos» — работало только потому, что
+          # GitHub держит переадресацию со старого имени. Переадресация
+          # исчезнет, если кто-нибудь займёт это имя, а уборка ниже и
+          # страница и так ищут «quiz»: три места должны звать один адрес.
           tag="r${{ github.run_id }}"
           gh release create "$tag" "$FILE" \
-            --repo gallxxxx/tiktok-quiz-videos \
+            --repo gallxxxx/quiz \
             --title "$NAME" \
             --notes "Собрано автоматически, запуск ${{ github.run_number }} (id ${{ github.run_id }})."
+
+      # Архив не копим: на сайте видно семь последних сборок, а всё, что
+      # старше, скачать оттуда всё равно нельзя. Держать эти файлы вечно
+      # незачем — убираем сами, вместе с метками.
+      #
+      # Порог — десять, а не семь: у Вики и подруги списки СВОИ, и семь
+      # последних у каждой могут не совпадать. Небольшой запас спасает
+      # от случая «подруга собрала три ролика подряд, и Викины ссылки
+      # протухли».
+      - name: Убрать старые ролики
+        if: success() && steps.episode.outputs.skip != 'yes'
+        # Уборка НЕ должна ронять сборку: ролик уже готов и выложен,
+        # а неубранный старый — мелочь по сравнению с надписью
+        # «сборка не удалась» на экране у человека.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Без RELEASE_TOKEN убирать нечем — пропускаю."
+            exit 0
+          fi
+
+          # Имена переменных ЛАТИНИЦЕЙ: bash кириллицу в них не принимает,
+          # и первая версия этого шага падала с «оставить=10: command not
+          # found», помечая всю сборку неудачной.
+          keep=10
+
+          # Сортируем по ИМЕНИ файла: оно начинается с даты и времени
+          # («2026-09-12 00-22 ...»), и это надёжнее даты самого релиза —
+          # та однажды разошлась с порядком роликов.
+          old=$(gh release list --repo gallxxxx/quiz --limit 100                   --json tagName,name                   --jq "sort_by(.name) | reverse | .[$keep:][] | .tagName")
+
+          if [ -z "$old" ]; then
+            echo "Старых роликов нет, убирать нечего."
+            exit 0
+          fi
+
+          for tag in $old; do
+            echo "Убираю: $tag"
+            gh release delete "$tag" --repo gallxxxx/quiz --yes --cleanup-tag || true
+          done
 
       # Если сборка упала — забираем всё, что успело получиться:
       # по данным и спискам источников понятно, где именно сломалось.

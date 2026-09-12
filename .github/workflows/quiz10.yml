@@ -1,0 +1,286 @@
+name: Викторина на 10 пунктов
+# Заголовок запуска — то, по чему страница узнаёт СВОЙ выпуск среди
+# чужих: коммита в этом репозитории может не быть. При запуске по
+# коммиту оставляем его подпись, иначе заголовок стал бы пустым
+# «Викторина 10:  ()» и не годился бы ни для чего.
+run-name: >-
+  ${{ inputs.id
+      && format('Викторина 10: {0} ({1})', inputs.stage, inputs.id)
+      || github.event.head_commit.message }}
+
+# Три шага одного выпуска, между ними стоит человек: проверить текст,
+# потом выбрать картинки. Страница кладёт задание в «задания10», мы
+# кладём ответ в «ответы10» — по нему страница показывает следующий экран.
+#
+# КОД ЗДЕСЬ, ДАННЫЕ — В ЗАКРЫТОМ РЕПОЗИТОРИИ. Этот репозиторий может
+# быть открытым: у GitHub машина для открытых вдвое мощнее, и выпуск
+# собирается заметно быстрее. Но через выпуск проходит чужой ролик,
+# свои фотографии для карточек и весь текст викторины — в открытом
+# доступе им не место, а журнал работы открытого репозитория читает
+# кто угодно. Поэтому задания и ответы живут у данных, сюда приезжают
+# клоном на время работы, и обратно уезжают туда же.
+#
+# Отсюда и запуск по вызову, а не по коммиту: коммита в этом
+# репозитории просто нет — задание кладётся в соседний.
+#
+# Имена работ, шагов и переменных оболочки — латиницей: кириллицу
+# GitHub в них не принимает, на этом уже обжигались.
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: "Какой выпуск (его «ид»)"
+        required: true
+      stage:
+        description: "Этап: расшифровка, перевод или сборка"
+        required: true
+        default: "расшифровка"
+  # Пока данные и код лежат в одном репозитории, старый путь тоже
+  # работает: положили задание — сборка проснулась сама.
+  push:
+    paths:
+      - "задания10/**.json"
+
+concurrency:
+  # Замок только от повторного запуска ОДНОГО И ТОГО ЖЕ шага одного
+  # выпуска. Разные выпуски идут одновременно — это и есть то, ради
+  # чего на странице сделан список работ.
+  group: quiz10-${{ inputs.id || github.sha }}-${{ inputs.stage }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # ответ кладём коммитом (когда репозиторий один)
+
+jobs:
+  quiz10:
+    name: Выпуск
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Забрать проект
+        uses: actions/checkout@v4
+        with:
+          # Нужна история: по ней видно, какое задание принёс этот коммит.
+          fetch-depth: 10
+
+      # Данные выпусков лежат отдельно — забираем их клоном. Нет
+      # переменной или секрета: значит, репозиторий один и тот же, и
+      # клонировать нечего — всё работает как раньше.
+      #
+      # Клон нарочно лёгкий: «blob:none» не тащит содержимое старых
+      # файлов, а «sparse» разворачивает только две нужные папки —
+      # весь код и заставки в рабочем дереве нам тут ни к чему.
+      # Урезать по глубине НЕЛЬЗЯ: ниже идёт «pull --rebase», а ему
+      # нужна история, иначе он спотыкается на мелком клоне.
+      - name: Забрать данные выпусков
+        id: data
+        env:
+          DATA_REPO: ${{ vars.DATA_REPO }}
+          DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
+        run: |
+          if [ -z "$DATA_REPO" ] || [ -z "$DATA_TOKEN" ]; then
+            echo "dir=$PWD" >> "$GITHUB_OUTPUT"
+            echo "Данные в этом же репозитории — клонировать нечего."
+            exit 0
+          fi
+          # Имя переменной латиницей: bash кириллицу в именах не берёт,
+          # и на этом проект спотыкался уже трижды.
+          dir="$RUNNER_TEMP/quiz-data"
+          git clone --filter=blob:none --sparse --quiet \
+            "https://x-access-token:$DATA_TOKEN@github.com/$DATA_REPO.git" "$dir"
+          git -C "$dir" sparse-checkout set задания10 ответы10
+          git -C "$dir" config user.name "quiz10"
+          git -C "$dir" config user.email "quiz10@users.noreply.github.com"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "Данные взяты из $DATA_REPO"
+
+      # Какое задание и какой у него этап — узнаём сразу после checkout.
+      # Раньше это стояло в самом конце, и машина успевала поставить
+      # полгигабайта того, что этому этапу не нужно.
+      #
+      # Задание называется по выпуску и этапу, а не «самое свежее в
+      # папке»: на чистой машине у всех файлов одинаковое время, и
+      # «самое свежее» становится случайным — так подруге однажды
+      # собрался чужой ролик.
+      - name: Найти задание
+        id: job
+        env:
+          DATA: ${{ steps.data.outputs.dir }}
+          ASKED_ID: ${{ inputs.id }}
+          ASKED_STAGE: ${{ inputs.stage }}
+        run: |
+          if [ -n "$ASKED_ID" ]; then
+            file="$DATA/задания10/$ASKED_ID.$ASKED_STAGE.json"
+          else
+            # Запуск по коммиту — старый путь, пока репозиторий один.
+            rel=$(git -c core.quotepath=false show --name-only --diff-filter=AM \
+                  --pretty=format: HEAD \
+                  | grep -E '^задания10/.+\.json$' | head -1 || true)
+            file="${rel:+$DATA/$rel}"
+          fi
+          if [ -z "$file" ] || [ ! -f "$file" ]; then
+            echo "skip=yes" >> "$GITHUB_OUTPUT"
+            echo "Задания для этого запуска нет — делать нечего."
+            exit 0
+          fi
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          stage=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1],encoding='utf-8')).get('этап','расшифровка'))" "$file")
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
+          echo "Беру задание: $file (этап: $stage)"
+
+      - name: Поставить Python
+        if: steps.job.outputs.skip != 'yes'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          # Без этой строки кэш ищет requirements.txt в корне и роняет
+          # шаг с «No file matched» — на первом же прогоне так и вышло.
+          cache-dependency-path: викторина10/requirements.txt
+
+      # ffmpeg отдельно НЕ ставим. Он приезжает с imageio-ffmpeg, и
+      # именно этот, привезённый, зовут все скрипты — системный лежал
+      # без дела и стоил двадцать секунд на каждом запуске.
+      - name: Поставить библиотеки
+        if: steps.job.outputs.skip != 'yes'
+        env:
+          STAGE: ${{ steps.job.outputs.stage }}
+        run: |
+          # faster-whisper тянет за собой ctranslate2 и onnxruntime —
+          # больше сотни мегабайт. Слушает речь только «расшифровка»,
+          # остальным этапам это лишнее.
+          req=викторина10/requirements.txt
+          if [ "$STAGE" != "расшифровка" ]; then
+            grep -v '^[[:space:]]*faster-whisper' "$req" > /tmp/req10.txt
+            req=/tmp/req10.txt
+          fi
+          python -m pip install --quiet --disable-pip-version-check -r "$req"
+
+      # Модель распознавания весит полгигабайта. Без кэша она качается
+      # на каждом запуске и съедает больше времени, чем сама работа.
+      # Нужна она только «расшифровке» — на сборке эти полгигабайта
+      # распаковывались впустую.
+      - name: Кэш модели распознавания
+        if: steps.job.outputs.stage == 'расшифровка'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-small-v1
+
+      # Ключи живут в секретах, а скриптам нужны файлами — ровно теми же,
+      # что лежат дома рядом с кнопками. Нет секрета — файла нет, и шаг
+      # просто идёт дальше: перевод уйдёт в Google, знаки не расставятся.
+      - name: Положить ключи
+        if: steps.job.outputs.skip != 'yes'
+        env:
+          DEEPL_KEY: ${{ secrets.DEEPL_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
+          PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
+        working-directory: викторина10
+        run: |
+          write_key () {
+            if [ -n "$2" ]; then printf '%s\n' "$2" > "$1"; echo "  есть: $1";
+            else echo "::warning::Секрета для «$1» нет — шаг обойдётся без него."; fi
+          }
+          write_key "ключ deepl.txt" "$DEEPL_KEY"
+          write_key "ключ gemini.txt" "$GEMINI_KEY"
+          write_key "ключ openrouter.txt" "$OPENROUTER_KEY"
+          write_key "ключ unsplash.txt" "$UNSPLASH_KEY"
+          write_key "ключ pexels.txt" "$PEXELS_KEY"
+
+      - name: Выполнить шаг выпуска
+        id: run
+        if: steps.job.outputs.skip != 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGE: ${{ steps.job.outputs.stage }}
+          FILE: ${{ steps.job.outputs.file }}
+          # Куда складывать работу и где лежат ветки со звуком: у ДАННЫХ,
+          # а не у кода. Пусто — значит, репозиторий один, как раньше.
+          QUIZ_DATA: ${{ steps.data.outputs.dir }}
+          QUIZ_DATA_REPO: ${{ vars.DATA_REPO }}
+          QUIZ_DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
+          # Данные лежат отдельно — значит, этот репозиторий открытый,
+          # и журнал работы виден кому угодно. Содержимое выпуска в него
+          # не печатаем.
+          QUIZ_TIHO: ${{ vars.DATA_REPO && '1' || '' }}
+        run: |
+          echo "Этап: $STAGE"
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          python викторина10/ci10.py "$STAGE" "$FILE"
+
+      # Ответ возвращаем коммитом — в тот репозиторий, где лежат данные.
+      # Страница читает его обычным запросом.
+      - name: Вернуть ответ
+        if: success() && steps.job.outputs.skip != 'yes'
+        working-directory: ${{ steps.data.outputs.dir }}
+        run: |
+          git config user.name "quiz10"
+          git config user.email "quiz10@users.noreply.github.com"
+          git add ответы10 || true
+          if git diff --cached --quiet; then
+            echo "Отвечать нечем — ничего не коммичу."
+            exit 0
+          fi
+          git commit -m "Ответ выпуска: ${{ steps.run.outputs.stage }}"
+          # Шаг выпуска пишет выбранные настройки прямо в файлы рядом со
+          # скриптами — на одноразовой машине это правильно, но рабочее
+          # дерево становится грязным, и «git pull --rebase» отказывается
+          # работать («You have unstaged changes»). Эти правки нам больше
+          # не нужны: ответ уже в коммите.
+          git checkout -- . || true
+          git clean -fd задания10 ответы10 || true
+          # Между началом сборки и этим шагом в репозиторий могли лечь
+          # чужие задания — поэтому не «push силой», а подтянуть и наложить.
+          for i in 1 2 3; do
+            git pull --rebase --quiet && git push --quiet && exit 0
+            echo "Попытка $i не прошла, пробую ещё раз."
+            sleep 5
+          done
+          echo "::error::Ответ не удалось вернуть в репозиторий."
+          exit 1
+
+      # Готовый ролик кладём релизом в открытый репозиторий — оттуда он
+      # качается обычной ссылкой, без входа в GitHub.
+      - name: Выложить ролик
+        if: success() && steps.run.outputs.stage == 'сборка'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          FILE: ${{ steps.run.outputs.file }}
+          NAME: ${{ steps.run.outputs.name }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::Секрет RELEASE_TOKEN не задан — ролик остался только артефактом."
+            exit 0
+          fi
+          tag="r${{ github.run_id }}"
+          gh release create "$tag" "$FILE" \
+            --repo gallxxxx/quiz \
+            --title "$NAME" \
+            --notes "Собрано автоматически, запуск ${{ github.run_number }} (id ${{ github.run_id }})."
+
+      - name: Отдать ролик файлом
+        if: success() && steps.run.outputs.stage == 'сборка'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rolik10
+          path: ${{ steps.run.outputs.file }}
+          retention-days: 30
+          if-no-files-found: warn
+
+      # Если шаг упал — забираем то, что успело получиться: по расшифровке
+      # и раскадровке видно, где именно сломалось.
+      - name: Что успело получиться
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: razbor10
+          path: |
+            выпуски10/**/out/*.txt
+            выпуски10/**/out/*.json
+            выпуски10/**/раскадровка.txt
+          retention-days: 7
+          if-no-files-found: ignore

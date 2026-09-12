@@ -108,22 +108,42 @@ const rounds = вопросы.map((q, i) => {
   };
 });
 
-// ——— свои фотографии из файла ———
+// ——— свои файлы из выпуска ———
+// Человек мог приложить и фотографию, и снятое видео. Что именно —
+// понимаем по имени файла: телефон отдаёт .mov или .mp4.
+const этоВидео = (имя) => /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(String(имя ?? ""));
+
 let saved = 0;
 for (let i = 0; i < вопросы.length; i += 1) {
   for (const side of ["сверху", "снизу"]) {
-    const фото = вопросы[i].фото?.[side];
-    if (!фото?.данные) continue;
+    const свой = вопросы[i].фото?.[side];
+    if (!свой?.данные) continue;
     const where = side === "сверху" ? "top" : "bottom";
     const name = slug(rounds[i][where].label) || "photo-" + (i + 1);
     try {
-      const raw = Buffer.from(String(фото.данные), "base64");
-      const кадр = await sharp(raw).rotate().resize(PHOTO_W, PHOTO_H, { fit: "cover" }).jpeg({ quality: 82 }).toBuffer();
-      fs.writeFileSync(path.join(PUBLIC, name + ".jpg"), кадр);
-      rounds[i][where].image = name + ".jpg";
+      const raw = Buffer.from(String(свой.данные), "base64");
+
+      if (этоВидео(свой.имя)) {
+        // Своё видео готовим тем же способом, что и сток: обрезаем до
+        // длины раунда, убираем звук, ужимаем под кадр. Телефонные HEVC
+        // и .mov ffmpeg внутри Remotion понимает — проверено.
+        const tmp = path.join(PUBLIC, `_своё-${i}-${where}.mp4`);
+        fs.writeFileSync(tmp, raw);
+        prepareClip(tmp, path.join(PUBLIC, name + ".mp4"));
+        try {
+          fs.rmSync(tmp, { force: true });
+        } catch {
+          /* Windows уберёт сам */
+        }
+        rounds[i][where].image = name + ".mp4";
+      } else {
+        const кадр = await sharp(raw).rotate().resize(PHOTO_W, PHOTO_H, { fit: "cover" }).jpeg({ quality: 82 }).toBuffer();
+        fs.writeFileSync(path.join(PUBLIC, name + ".jpg"), кадр);
+        rounds[i][where].image = name + ".jpg";
+      }
       saved += 1;
     } catch (e) {
-      console.log(`   фото для «${rounds[i][where].label}» не пригодилось: ${e.message}`);
+      console.log(`   свой файл для «${rounds[i][where].label}» не пригодился: ${e.message}`);
     }
   }
 }
@@ -235,7 +255,7 @@ if (н.голос) writeVoiceName(String(н.голос));
 console.log("");
 console.log(`Вопросов принято: ${rounds.length}.`);
 rounds.forEach((r, i) => console.log(`   ${i + 1}. ${r.top.label} / ${r.bottom.label}`));
-if (saved) console.log(`Своих фотографий принято: ${saved}.`);
+if (saved) console.log(`Своих файлов принято: ${saved}.`);
 if (взято) console.log(`Одобренных картинок скачано: ${взято}.`);
 
 // Сколько мест осталось пустыми — по этому числу сборочная машина решает,

@@ -15,6 +15,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readMode, readShot, MODE_NAMES } from "./media-mode.mjs";
+import { readKey } from "./media.mjs";
 import { clearGaps, fillGaps } from "./gaps.mjs";
 import { readRounds, writeRoundsToRoot } from "./read-rounds.mjs";
 
@@ -44,6 +45,16 @@ const run = (script, args = []) => {
 let code = 0;
 if (mode === "видео") {
   code = run("get-videos.mjs", shot === "общий" ? ["--wide"] : []);
+
+  // Клипы бывают только на Pexels, и без ключа их взять неоткуда: место
+  // оставалось пустым, и в кадр шла плашка с названием. Фотографии же
+  // ищутся и без ключа — по Википедии и Openverse. Пусть лучше будет
+  // фотография, чем серая табличка.
+  if (!readKey("ключ pexels.txt")) {
+    console.log("");
+    console.log("Ключа Pexels нет — клипы взять негде. Поищу фотографии.");
+    code = run("get-photos.mjs", ["--replace"]);
+  }
 } else if (mode === "фото") {
   code = run("get-photos.mjs", ["--replace", "--pexels"]);
 } else {
