@@ -648,6 +648,14 @@ def main():
     elif seen:
         print("Помню %d снимков из прошлых выпусков — повторять не буду."
               % len(seen))
+    # Сборка может идти в ОТКРЫТОМ репозитории, а его журнал читает кто
+    # угодно и хранится он вечно. Подписи карточек — это ответы
+    # викторины, то есть весь выпуск. Печатаем тогда только номер.
+    тихо = bool(os.environ.get("QUIZ_TIHO"))
+
+    def строка(i, name, что):
+        print("%2d. %-14s %s" % (i, "···" if тихо else name, что))
+
     ok, bad = 0, []
     for i, name in enumerate(items, 1):
         dst = os.path.join(READY, "%02d.png" % i)
@@ -657,15 +665,14 @@ def main():
         if own:
             make_card(io.open(own, "rb").read(),
                       own.lower().endswith(".png"), dst)
-            print("%2d. %-14s свой файл (%s)" % (i, name,
-                                                 os.path.basename(own)))
+            строка(i, name, "свой файл (%s)" % os.path.basename(own))
             ok += 1
             continue
         data, is_logo, what, url = fetch(name, key, prefer_photo,
                                          query_for(name, query_tpl, brands),
                                          variant, mode, seen)
         if not data:
-            print("%2d. %-14s НЕ НАШЁЛСЯ" % (i, name))
+            строка(i, name, "НЕ НАШЁЛСЯ")
             bad.append((i, name))
             continue
         # прежний файл сохраняем: вариант может оказаться хуже нынешнего
@@ -677,10 +684,10 @@ def main():
         try:
             make_card(data, is_logo, dst)
         except Exception as e:
-            print("%2d. %-14s картинка битая (%s)" % (i, name, e))
+            строка(i, name, "картинка битая (%s)" % e)
             bad.append((i, name))
             continue
-        print("%2d. %-14s %s" % (i, name, what))
+        строка(i, name, what)
         if url:
             remember_url(url)
             seen.add(url)
@@ -688,9 +695,13 @@ def main():
 
     print("\nГотово: %d из %d.  Лежат в картинки\\готовые" % (ok, len(items)))
     if bad:
-        print("Не нашлись: %s" % ", ".join(n for _, n in bad))
-        print("Положи свои файлы в картинки\\своё и назови их как ответ —"
-              " «%s.png» — и запусти снова." % bad[0][1])
+        if тихо:
+            print("Не нашлись пункты: %s"
+                  % ", ".join(str(i) for i, _ in bad))
+        else:
+            print("Не нашлись: %s" % ", ".join(n for _, n in bad))
+            print("Положи свои файлы в картинки\\своё и назови их как ответ —"
+                  " «%s.png» — и запусти снова." % bad[0][1])
 
 
 if __name__ == "__main__":
