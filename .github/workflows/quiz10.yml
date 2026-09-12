@@ -1,7 +1,10 @@
 name: Викторина на 10 пунктов
-# Заголовок запуска — то, по чему страница узнаёт СВОЙ выпуск среди
-# чужих: коммита в этом репозитории нет, задание лежит в соседнем.
-run-name: "Викторина 10: ${{ inputs.stage }} (${{ inputs.id }})"
+# Заголовок запуска — то, по чему видно, какой это выпуск. При запуске
+# по коммиту берём его подпись: там «ид» и так есть.
+run-name: >-
+  ${{ inputs.id
+      && format('Викторина 10: {0} ({1})', inputs.stage, inputs.id)
+      || github.event.head_commit.message }}
 
 # Три шага одного выпуска, между ними стоит человек: проверить текст,
 # потом выбрать картинки. Страница кладёт задание в «задания10», мы
@@ -30,25 +33,81 @@ on:
         description: "Этап: расшифровка, перевод или сборка"
         required: true
         default: "расшифровка"
-  # Запуска «от коммита» здесь больше НЕТ, и это не забывчивость.
-  # Задание кладётся в репозиторий с данными, а сценарий лежит в обоих:
-  # от коммита проснулись бы ОБА, и один выпуск собрался бы дважды —
-  # две сборки, два релиза, два ответа наперегонки. Зовёт страница,
-  # и зовёт ровно один раз.
+  # Запуск от коммита — ОСНОВНОЙ путь, и вот почему. Телефон умеет
+  # ровно одно: положить файл в репозиторий с данными. Так было всегда,
+  # и прав у него на это хватает. Как только страница начала САМА
+  # звать сборку в соседнем репозитории, ей понадобились новые права —
+  # и она встала колом на «403 Resource not accessible by personal
+  # access token». Права телефона больше не участвуют: задание лёг —
+  # дальше дело машины.
+  push:
+    paths:
+      - "задания10/**.json"
 
 concurrency:
   # Замок только от повторного запуска ОДНОГО И ТОГО ЖЕ шага одного
   # выпуска. Разные выпуски идут одновременно — это и есть то, ради
   # чего на странице сделан список работ.
-  group: quiz10-${{ inputs.id }}-${{ inputs.stage }}
+  group: quiz10-${{ inputs.id || github.sha }}-${{ inputs.stage }}
   cancel-in-progress: false
 
 permissions:
   contents: write        # ответ кладём коммитом (когда репозиторий один)
 
 jobs:
+  # ——— Репозиторий с ДАННЫМИ: передать работу туда, где машина мощнее.
+  # Отдельной работой, потому что она копеечная: десять секунд против
+  # шести минут сборки, и запускается только от коммита.
+  передать:
+    name: Передать сборку
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      done: ${{ steps.go.outputs.done }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+      - name: Позвать открытую сборку
+        id: go
+        env:
+          # Куда передавать и чем. Нет переменной или секрета — значит,
+          # передавать некуда: соберём здесь же. Медленнее вдвое, но
+          # РАБОТАЕТ ВСЕГДА, и это важнее скорости.
+          BUILD_REPO: ${{ vars.BUILD_REPO }}
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$BUILD_REPO" ] || [ -z "$GH_TOKEN" ]; then
+            echo "Передавать некуда — соберу здесь."
+            exit 0
+          fi
+          rel=$(git -c core.quotepath=false show --name-only --diff-filter=AM \
+                --pretty=format: HEAD \
+                | grep -E '^задания10/.+\.json$' | head -1 || true)
+          if [ -z "$rel" ]; then
+            echo "Этот коммит задания не приносил."
+            echo "done=yes" >> "$GITHUB_OUTPUT"      # и собирать нечего
+            exit 0
+          fi
+          base=$(basename "$rel" .json)
+          id=${base%.*}
+          stage=${base##*.}
+          echo "Передаю $BUILD_REPO: выпуск $id, этап $stage"
+          if gh workflow run quiz10.yml --repo "$BUILD_REPO" \
+               -f id="$id" -f stage="$stage"; then
+            echo "done=yes" >> "$GITHUB_OUTPUT"
+          else
+            # Не вышло — не беда и не повод терять выпуск: соберём сами.
+            echo "::warning::Передать не удалось — собираю здесь."
+          fi
+
   quiz10:
     name: Выпуск
+    needs: [передать]
+    # Работа «передать» не запускается вовсе при вызове со страницы —
+    # «always()» нужен, чтобы это не считалось провалом зависимости.
+    if: always() && needs.передать.outputs.done != 'yes'
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -105,8 +164,17 @@ jobs:
           ASKED_ID: ${{ inputs.id }}
           ASKED_STAGE: ${{ inputs.stage }}
         run: |
-          file="$DATA/задания10/$ASKED_ID.$ASKED_STAGE.json"
-          if [ -z "$ASKED_ID" ] || [ ! -f "$file" ]; then
+          if [ -n "$ASKED_ID" ]; then
+            file="$DATA/задания10/$ASKED_ID.$ASKED_STAGE.json"
+          else
+            # Собираем у себя (передать было некуда или не вышло) —
+            # берём задание ЭТОГО коммита.
+            rel=$(git -c core.quotepath=false show --name-only \
+                  --diff-filter=AM --pretty=format: HEAD \
+                  | grep -E '^задания10/.+\.json$' | head -1 || true)
+            file="${rel:+$DATA/$rel}"
+          fi
+          if [ -z "$file" ] || [ ! -f "$file" ]; then
             echo "skip=yes" >> "$GITHUB_OUTPUT"
             echo "Задания для этого запуска нет — делать нечего."
             exit 0
@@ -208,6 +276,43 @@ jobs:
           echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
           python викторина10/ci10.py "$STAGE" "$FILE"
 
+      # Готовый ролик кладём релизом в открытый репозиторий — оттуда он
+      # качается обычной ссылкой, без входа в GitHub.
+      #
+      # Идёт это ДО возврата ответа, чтобы ссылку можно было вписать
+      # прямо в ответ. Иначе страница ищет ролик сама: перебирает
+      # запуски, метки и релизы — а для этого ей нужен доступ к
+      # репозиторию, где шла сборка. Ссылка в ответе снимает вопрос:
+      # телефон читает ровно тот файл, которого и так ждёт.
+      - name: Выложить ролик
+        id: релиз
+        if: success() && steps.run.outputs.stage == 'сборка'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          FILE: ${{ steps.run.outputs.file }}
+          NAME: ${{ steps.run.outputs.name }}
+          # Имя переменной латиницей: bash кириллицу в именах не берёт.
+          ANSWER: ${{ steps.data.outputs.dir }}/ответы10/${{ steps.run.outputs.id }}.сборка.json
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::Секрет RELEASE_TOKEN не задан — ролик остался только артефактом."
+            exit 0
+          fi
+          tag="r${{ github.run_id }}"
+          gh release create "$tag" "$FILE" \
+            --repo gallxxxx/quiz \
+            --title "$NAME" \
+            --notes "Собрано автоматически, запуск ${{ github.run_number }} (id ${{ github.run_id }})."
+          link=$(gh release view "$tag" --repo gallxxxx/quiz \
+                 --json assets -q '.assets[0].url' || true)
+          if [ -n "$link" ] && [ -f "$ANSWER" ]; then
+            tmp=$(mktemp)
+            jq --arg u "$link" --arg n "$NAME" \
+               '. + {"ссылка": $u, "имя": $n}' "$ANSWER" > "$tmp" \
+              && mv "$tmp" "$ANSWER" \
+              && echo "Ссылка на ролик вписана в ответ."
+          fi
+
       # Ответ возвращаем коммитом — в тот репозиторий, где лежат данные.
       # Страница читает его обычным запросом.
       - name: Вернуть ответ
@@ -238,25 +343,6 @@ jobs:
           done
           echo "::error::Ответ не удалось вернуть в репозиторий."
           exit 1
-
-      # Готовый ролик кладём релизом в открытый репозиторий — оттуда он
-      # качается обычной ссылкой, без входа в GitHub.
-      - name: Выложить ролик
-        if: success() && steps.run.outputs.stage == 'сборка'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          FILE: ${{ steps.run.outputs.file }}
-          NAME: ${{ steps.run.outputs.name }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::Секрет RELEASE_TOKEN не задан — ролик остался только артефактом."
-            exit 0
-          fi
-          tag="r${{ github.run_id }}"
-          gh release create "$tag" "$FILE" \
-            --repo gallxxxx/quiz \
-            --title "$NAME" \
-            --notes "Собрано автоматически, запуск ${{ github.run_number }} (id ${{ github.run_id }})."
 
       - name: Отдать ролик файлом
         if: success() && steps.run.outputs.stage == 'сборка'
