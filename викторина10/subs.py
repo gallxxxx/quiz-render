@@ -5,6 +5,17 @@
 Запуск:  python subs.py                  (берёт свежий файл из папки «вход»)
          python subs.py "мой ролик.mp4"
          python subs.py --model medium    (точнее, но втрое дольше)
+         python subs.py --свой "текст.txt"   (готовый текст, без ролика)
+         python subs.py --сам             (слушать только местным Whisper)
+
+Слушает НЕЙРОСЕТЬ, а местный Whisper остался запасным. Причина в
+живых роликах: Whisper «small» делал «Юбитер» из Юпитера, «Асьминог»
+из осьминога, «Тетёртый» из Четвёртого и пропустил два пункта
+целиком — человек переписывал половину руками. Подробности и замеры
+в «слух.py».
+
+С «--свой» речь не слушается вовсе: текст приносит человек. Это тот
+же путь, которым на сайте работает кнопка «Вставить текст».
 
 Пишет:
   <имя>.русский.txt   фразы с временами — ЭТО ТЕКСТ ДЛЯ ПРОВЕРКИ.
@@ -180,7 +191,13 @@ def write_srt(cues, path):
 
 def write_txt(text, path):
     io.open(path, "w", encoding="utf-8").write(text)
-    print("   ", os.path.relpath(path, HERE))
+    try:
+        print("   ", os.path.relpath(path, HERE))
+    except ValueError:
+        # Папка выпуска может лежать на другом диске — тогда «путь
+        # относительно» посчитать нельзя, и Windows роняет весь шаг
+        # из-за одной строчки в журнале.
+        print("   ", os.path.basename(path))
 
 
 def run(model, wav, task):
@@ -191,6 +208,40 @@ def run(model, wav, task):
     return list(segs)
 
 
+def записать(name, words):
+    """Одни и те же три файла, каким бы путём ни пришли слова."""
+    io.open(os.path.join(OUT_DIR, name + ".слова.json"), "w",
+            encoding="utf-8").write(
+        json.dumps(words, ensure_ascii=False, indent=1))
+    print("   ", name + ".слова.json  (слов: %d)" % len(words))
+    write_txt(" ".join(w["w"] for w in words),
+              os.path.join(OUT_DIR, name + ".ru.txt"))
+    # Файлы прошлого выпуска убираем сразу: тиктоки скачиваются под одним
+    # именем, и старый перевод молча достался бы следующему шагу.
+    for ext in (".английский.txt", ".en.srt", ".исходный.srt", ".en.txt"):
+        old_file = os.path.join(OUT_DIR, name + ext)
+        if os.path.exists(old_file):
+            os.remove(old_file)
+    write_phrases(phrases(words), os.path.join(OUT_DIR, name + ".русский.txt"))
+
+
+def свой_текст(путь):
+    """Человек принёс готовый текст — слушать нечего."""
+    sys.path.insert(0, HERE)
+    import слух
+    текст = io.open(путь, encoding="utf-8-sig").read().strip()
+    if not текст:
+        sys.exit("Файл с текстом пустой.")
+    name = os.path.splitext(os.path.basename(путь))[0]
+    os.makedirs(OUT_DIR, exist_ok=True)
+    words = слух.слова_из_текста(текст)
+    print("Беру готовый текст: %s  (слов: %d)"
+          % (os.path.basename(путь), len(words)))
+    записать(name, words)
+    print("\nГотово. Речь не слушали — текст принесли готовым.")
+    print("Дальше — перевести (перевод.py).")
+
+
 def main():
     args = list(sys.argv[1:])
     size = "small"
@@ -198,6 +249,14 @@ def main():
         i = args.index("--model")
         size = args[i + 1]
         del args[i:i + 2]
+    только_сам = "--сам" in args
+    if только_сам:
+        args.remove("--сам")
+    if "--свой" in args:
+        i = args.index("--свой")
+        путь = args[i + 1]
+        return свой_текст(путь)
+
     src = pick_video(args[0] if args else None)
     name = os.path.splitext(os.path.basename(src))[0]
 
@@ -209,36 +268,42 @@ def main():
     print("Достаю звук...")
     to_wav(src, wav)
 
-    from faster_whisper import WhisperModel
-    print("Гружу модель «%s» (первый раз качается ~0.5 ГБ, потом из кэша)..."
-          % size)
-    model = WhisperModel(size, device="cpu", compute_type="int8")
+    # Сначала нейросеть: на именах собственных и знаках препинания она
+    # заметно точнее местного Whisper, а переписывать текст руками —
+    # самая нудная часть работы. Времена слов она не даёт, и они тут
+    # рисуются по длине: настоящие всё равно считаются заново по
+    # английской озвучке. Подробности в «слух.py».
+    words = []
+    if not только_сам:
+        sys.path.insert(0, HERE)
+        import слух
+        текст, кто = слух.нейросетью(wav)
+        if текст:
+            words = слух.слова_из_текста(текст)
+            print("Расслышал %s." % кто)
 
-    print("Слушаю по-русски (слова и времена)...")
-    ru = run(model, wav, "transcribe")
-    words = flat_words(ru)
+    if not words:
+        if не_молчим(только_сам):
+            print("Нейросеть не ответила — слушаю местным Whisper.")
+        from faster_whisper import WhisperModel
+        print("Гружу модель «%s» (первый раз качается ~0.5 ГБ, потом из кэша)..."
+              % size)
+        model = WhisperModel(size, device="cpu", compute_type="int8")
+        print("Слушаю по-русски (слова и времена)...")
+        words = flat_words(run(model, wav, "transcribe"))
+
     if not words:
         os.remove(wav)
-        sys.exit("Whisper ничего не услышал. Проверь, есть ли в ролике звук.")
-    io.open(os.path.join(OUT_DIR, name + ".слова.json"), "w",
-            encoding="utf-8").write(
-        json.dumps(words, ensure_ascii=False, indent=1))
-    print("   ", name + ".слова.json  (слов: %d)" % len(words))
-    write_txt(" ".join(w["w"] for w in words),
-              os.path.join(OUT_DIR, name + ".ru.txt"))
+        sys.exit("Речь распознать не вышло. Проверь, есть ли в ролике звук.")
 
-    # Файлы прошлого выпуска убираем сразу: тиктоки скачиваются под одним
-    # именем, и старый перевод молча достался бы следующему шагу.
-    for ext in (".английский.txt", ".en.srt", ".исходный.srt", ".en.txt"):
-        old_file = os.path.join(OUT_DIR, name + ext)
-        if os.path.exists(old_file):
-            os.remove(old_file)
-
-    write_phrases(phrases(words), os.path.join(OUT_DIR, name + ".русский.txt"))
-
+    записать(name, words)
     os.remove(wav)
     print("\nГотово. Слов: %d" % len(words))
     print("Дальше — проверить русский текст и перевести (перевод.py).")
+
+
+def не_молчим(только_сам):
+    return not только_сам
 
 
 if __name__ == "__main__":

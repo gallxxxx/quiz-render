@@ -236,6 +236,9 @@ jobs:
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
+          # Groq крутит whisper-large-v3 — лучший бесплатный слух.
+          # Ключа нет — речь слушает Gemini, он тоже хорош.
+          GROQ_KEY: ${{ secrets.GROQ_KEY }}
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
         working-directory: викторина10
         run: |
@@ -248,6 +251,7 @@ jobs:
           write_key "ключ openrouter.txt" "$OPENROUTER_KEY"
           write_key "ключ unsplash.txt" "$UNSPLASH_KEY"
           write_key "ключ pexels.txt" "$PEXELS_KEY"
+          write_key "ключ groq.txt" "$GROQ_KEY"
           # Размер в байтах и где лежит — этого хватает, чтобы понять
           # «пустой секрет» и «файл не там», и не видно ни одного знака
           # самого ключа. «Есть» в строчке выше говорит только о том,
