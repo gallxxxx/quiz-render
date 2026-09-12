@@ -379,8 +379,104 @@ def pack_pulse(np):
     return beat, reveal, 1.0
 
 
+def pack_bell(np):
+    """Колокольчик: чистый звон, как у гонга в конце раунда.
+
+    Светлее маримбы и заметнее капель — хорошо слышно поверх фона,
+    но не давит: обертоны затухают быстро, звенит только основной тон.
+    """
+    ступени = (659.25, 739.99, 830.61, 880.0, 987.77, 1108.73)
+
+    def beat(k, n):
+        t = np.arange(int(SR * 1.1)) / SR
+        f = ступени[min(k, len(ступени) - 1)]
+        w = (np.sin(2 * math.pi * f * t) * _env(np, t, 2.6)
+             + 0.30 * np.sin(2 * math.pi * f * 2.76 * t) * _env(np, t, 5.5)
+             + 0.14 * np.sin(2 * math.pi * f * 5.4 * t) * _env(np, t, 9.0))
+        return 0.20 * w
+
+    def reveal():
+        t = np.arange(int(SR * 1.8)) / SR
+        return (0.22 * np.sin(2 * math.pi * 1046.5 * t) * _env(np, t, 1.5)
+                + 0.14 * np.sin(2 * math.pi * 1567.98 * t) * _env(np, t, 2.0)
+                + 0.08 * np.sin(2 * math.pi * 2093.0 * t) * _env(np, t, 3.0))
+    return beat, reveal, 1.0
+
+
+def pack_wood(np):
+    """Деревянная коробочка: сухой короткий стук без единого звона.
+
+    Самый ненавязчивый набор. Годится, когда в кадре и так много
+    всего, а отсчёт нужен только чтобы держать ритм.
+    """
+    def beat(k, n):
+        t = np.arange(int(SR * 0.12)) / SR
+        f = 420.0 + 30.0 * k
+        шум = np.random.RandomState(100 + k).normal(0, 0.12, len(t))
+        w = (np.sin(2 * math.pi * f * t)
+             + 0.5 * np.sin(2 * math.pi * f * 1.6 * t) + шум)
+        return 0.30 * w * _env(np, t, 30.0, 0.002)
+
+    def reveal():
+        t = np.arange(int(SR * 0.9)) / SR
+        f = 700.0 + 260.0 * np.minimum(1.0, t * 6)
+        phase = 2 * math.pi * np.cumsum(f) / SR
+        return 0.26 * np.sin(phase) * _env(np, t, 4.0, 0.003)
+    return beat, reveal, 1.0
+
+
+def pack_water(np):
+    """Вода: мягкий всплеск с шелестом. Спокойнее всех, почти фон."""
+    def beat(k, n):
+        t = np.arange(int(SR * 0.35)) / SR
+        f = (480.0 + 70.0 * k) * np.exp(-t * 7.0) + 210.0
+        phase = 2 * math.pi * np.cumsum(f) / SR
+        шелест = np.random.RandomState(7 + k).normal(0, 1, len(t))
+        шелест = np.convolve(шелест, np.ones(40) / 40, mode="same")
+        return (0.22 * np.sin(phase) * _env(np, t, 8.0, 0.006)
+                + 0.07 * шелест * _env(np, t, 16.0, 0.004))
+
+    def reveal():
+        t = np.arange(int(SR * 1.4)) / SR
+        f = 900.0 * np.exp(-t * 3.0) + 440.0
+        phase = 2 * math.pi * np.cumsum(f) / SR
+        return (0.24 * np.sin(phase) * _env(np, t, 2.4, 0.006)
+                + 0.10 * np.sin(2 * math.pi * 880.0 * t) * _env(np, t, 2.0))
+    return beat, reveal, 1.0
+
+
+def pack_arcade(np):
+    """Аркада: бодрый восьмибитный писк. Для быстрых весёлых выпусков."""
+    def beat(k, n):
+        t = np.arange(int(SR * 0.13)) / SR
+        f = 520.0 + 80.0 * k
+        квадрат = np.sign(np.sin(2 * math.pi * f * t))
+        return 0.15 * квадрат * _env(np, t, 26.0, 0.002)
+
+    def reveal():
+        t = np.arange(int(SR * 0.55)) / SR
+        # короткая восходящая трель — «получилось!»
+        f = 520.0 * (2.0 ** (np.floor(t * 12) / 6.0))
+        phase = 2 * math.pi * np.cumsum(f) / SR
+        return 0.16 * np.sign(np.sin(phase)) * _env(np, t, 4.0, 0.002)
+    return beat, reveal, 1.0
+
+
+def pack_none(np):
+    """Совсем без звука отсчёта — только голос диктора."""
+    def beat(k, n):
+        return np.zeros(int(SR * 0.05))
+
+    def reveal():
+        return np.zeros(int(SR * 0.05))
+    return beat, reveal, 1.0
+
+
 PACKS = {"маримба": pack_marimba, "часы": pack_clock,
-         "капли": pack_drops, "пульс": pack_pulse}
+         "капли": pack_drops, "пульс": pack_pulse,
+         "колокольчик": pack_bell, "дерево": pack_wood,
+         "вода": pack_water, "аркада": pack_arcade,
+         "тишина": pack_none}
 
 
 def make_timer_track(path, rounds, dur, voice_path=None, pack="маримба"):

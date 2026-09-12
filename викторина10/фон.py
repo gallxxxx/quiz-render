@@ -62,14 +62,46 @@ UA = "TikTokQuiz/1.0 (personal project)"
 ПРЕСЕТ, CRF = "veryfast", "18"
 
 # Спокойные залипательные виды. Порядок перемешивается при каждом запуске.
+#
+# Список нарочно длинный. Раньше их было восемнадцать, и брались они
+# всегда с первых двух страниц — сток на один и тот же запрос отдаёт
+# один и тот же верх выдачи, и от выпуска к выпуску крутились те же
+# виды. Вика: «фоны постоянно повторяются, крутятся одни и те же из
+# видео в видео, я хочу разнообразия». Шесть десятков тем плюс
+# случайная страница дают запас на годы вперёд.
 QUERIES = [
-    "drone road mountains", "aerial coastline sunset", "forest road driving",
-    "mountain fog aerial", "ocean waves aerial", "waterfall jungle",
-    "desert road drone", "lake reflection mountains", "snow road winter",
-    "palm trees road", "river canyon aerial", "green hills drone",
-    "city night driving", "rain on window", "sunset field drone",
-    "tropical beach aerial", "autumn forest road", "cliff ocean drone",
+    # дороги и движение
+    "drone road mountains", "forest road driving", "desert road drone",
+    "snow road winter", "palm trees road", "autumn forest road",
+    "coastal highway aerial", "mountain pass road", "country road sunset",
+    "night city driving", "bridge aerial view", "railway aerial",
+    # вода
+    "aerial coastline sunset", "ocean waves aerial", "waterfall jungle",
+    "lake reflection mountains", "river canyon aerial", "cliff ocean drone",
+    "turquoise sea aerial", "tropical beach aerial", "waves slow motion",
+    "mountain lake drone", "river through forest", "iceberg aerial",
+    "boat wake aerial", "lighthouse coast", "fjord aerial",
+    # горы и поля
+    "mountain fog aerial", "green hills drone", "sunset field drone",
+    "lavender field drone", "wheat field wind", "rice terraces aerial",
+    "volcano aerial", "canyon sunrise", "alpine meadow drone",
+    "sand dunes aerial", "tea plantation aerial", "vineyard aerial",
+    # лес и небо
+    "pine forest aerial", "autumn forest aerial", "misty forest morning",
+    "clouds time lapse", "northern lights time lapse", "starry sky time lapse",
+    "sunrise clouds aerial", "rain on window", "snow falling forest",
+    "cherry blossom wind", "bamboo forest", "jungle canopy aerial",
+    # города и покой
+    "city skyline sunset", "city lights time lapse", "old town aerial",
+    "harbor aerial", "bridge night city", "rooftop view sunset",
+    "campfire night", "candle slow motion", "coffee pouring slow motion",
+    "ink in water", "silk fabric slow motion", "bokeh lights",
 ]
+
+# Сколько страниц выдачи считаем «своими». Сток отдаёт по 15 клипов на
+# страницу; берём случайную из первых восьми, иначе всегда приезжает
+# верх выдачи — самые заезженные ролики стока.
+СТРАНИЦ = 8
 
 
 def ffmpeg():
@@ -90,9 +122,13 @@ def pexels_key():
     return None
 
 
-def get_json(url, key):
-    req = urllib.request.Request(url, headers={"Authorization": key,
-                                               "User-Agent": UA})
+def get_json(url, key=None):
+    # Pexels просит ключ заголовком, Pixabay — прямо в адресе; поэтому
+    # ключ тут необязательный.
+    заголовки = {"User-Agent": UA}
+    if key:
+        заголовки["Authorization"] = key
+    req = urllib.request.Request(url, headers=заголовки)
     with urllib.request.urlopen(req, timeout=45) as r:
         return json.loads(r.read().decode("utf-8"))
 
@@ -238,37 +274,92 @@ def own_pieces(clips, count, piece):
     return fresh[:count]
 
 
+def pixabay_key():
+    """Второй сток. Нет ключа — обходимся одним, это не беда."""
+    for p in (os.path.join(HERE, "ключ pixabay.txt"),
+              os.path.join(os.path.dirname(HERE), "ключ pixabay.txt")):
+        if os.path.exists(p):
+            for raw in io.open(p, encoding="utf-8-sig"):
+                line = raw.strip()
+                if line and not line.startswith("#"):
+                    return line
+    return None
+
+
+def с_пиксабея(q, piece, seen, tried, key):
+    """Клип с Pixabay. Другой сток — другие виды, и это главное."""
+    url = ("https://pixabay.com/api/videos/?key=%s&q=%s&video_type=film"
+           "&orientation=vertical&per_page=20&page=%d"
+           % (key, urllib.parse.quote(q), random.randint(1, 4)))
+    видео = []
+    for v in get_json(url).get("hits", []):
+        vid = "pix%s" % v.get("id")
+        if vid in seen or vid in tried:
+            continue
+        if (v.get("duration") or 0) < piece * 0.8:
+            continue
+        files = v.get("videos") or {}
+        ссылка = ((files.get("large") or {}).get("url")
+                  or (files.get("medium") or {}).get("url"))
+        if ссылка:
+            видео.append((vid, ссылка, q, v["duration"]))
+    return видео
+
+
+def с_пексельса(q, piece, seen, tried, key):
+    """Клип с Pexels — страница случайная, а не всегда первая."""
+    url = ("https://api.pexels.com/videos/search?query=%s"
+           "&orientation=portrait&size=medium&per_page=15&page=%d"
+           % (urllib.parse.quote(q), random.randint(1, СТРАНИЦ)))
+    видео = []
+    for v in get_json(url, key).get("videos", []):
+        vid = v["id"]
+        if vid in seen or vid in tried:
+            continue
+        if (v.get("duration") or 0) < piece * 0.8:
+            continue
+        link = pick_file(v)
+        if link:
+            видео.append((vid, link, q, v["duration"]))
+    return видео
+
+
 def search(queries, count, piece, key, seen):
+    """Ищем по разным темам, на разных страницах и по разным стокам.
+
+    Три источника разнообразия, и все три нужны: тем шесть десятков,
+    страница выдачи случайная, и клип со страницы выбирается наугад,
+    а не первый. Раньше было восемнадцать тем и всегда первые две
+    страницы — сток отдавал один и тот же верх выдачи, и фоны шли
+    по кругу от выпуска к выпуску.
+    """
     found, tried = [], set()
     order = list(queries)
     random.shuffle(order)
-    for q in order:
+    пиксабей = pixabay_key()
+    источники = [("Pexels", lambda q: с_пексельса(q, piece, seen, tried, key))]
+    if пиксабей:
+        источники.append(
+            ("Pixabay", lambda q: с_пиксабея(q, piece, seen, tried, пиксабей)))
+    print("   стоков: %s" % ", ".join(и for и, _ in источники))
+
+    for n, q in enumerate(order):
         if len(found) >= count:
             break
-        for page in (1, 2):
-            url = ("https://api.pexels.com/videos/search?query=%s"
-                   "&orientation=portrait&size=medium&per_page=15&page=%d"
-                   % (urllib.parse.quote(q), page))
-            try:
-                data = get_json(url, key)
-            except Exception as e:
-                print("   поиск «%s» не удался (%s)" % (q, e))
-                break
-            for v in data.get("videos", []):
-                vid = v["id"]
-                if vid in seen or vid in tried:
-                    continue
-                tried.add(vid)
-                if (v.get("duration") or 0) < piece * 0.8:
-                    continue          # слишком короткий, резать нечего
-                link = pick_file(v)
-                if not link:
-                    continue
-                found.append((vid, link, q, v["duration"]))
-                print("   %-26s id %-9s %2d сек" % (q, vid, v["duration"]))
-                break                 # по одному клипу на запрос — виды разные
-            if len(found) >= count or found and found[-1][2] == q:
-                break
+        # Чередуем стоки: иначе второй подключался бы только когда
+        # первый выдохся, и разнообразия от него не прибавилось бы.
+        имя, ищем = источники[n % len(источники)]
+        try:
+            видео = ищем(q)
+        except Exception as e:
+            print("   поиск «%s» на %s не удался (%s)" % (q, имя, e))
+            continue
+        if not видео:
+            continue
+        vid, link, тема, длина = random.choice(видео)
+        tried.add(vid)
+        found.append((vid, link, тема, длина))
+        print("   %-26s %-8s id %-11s %2d сек" % (тема, имя, vid, длина))
     return found[:count]
 
 
