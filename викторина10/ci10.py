@@ -298,28 +298,51 @@ def завести_ветку(репо, токен, ветка):
             raise
 
 
-def положить(репо, токен, ветка, файл, данные, подпись):
-    """Кладёт файл в ветку. Если он там уже есть — заменяет."""
+def положить(репо, токен, ветка, файл, данные, подпись, попыток=4):
+    """Кладёт файл в ветку. Если он там уже есть — заменяет.
+
+    С ПОВТОРАМИ, и это не перестраховка. GitHub время от времени
+    отвечает «502 Bad Gateway» просто так: на проверке формата пар
+    один такой ответ уронил весь шаг, и выпуск пропал — при том что
+    работа уже была сделана. Случайный сбой чужой стороны не должен
+    стоить выпуска; худшее, чем он может обойтись, — лишние секунды.
+
+    Повторяем только то, что имеет смысл повторять: перегрузку и
+    обрыв связи. «Нет прав» или «нет такой ветки» от повтора не
+    исправятся, и цепляться за них незачем.
+    """
     адрес = ("https://api.github.com/repos/%s/contents/%s"
              % (репо, urllib.parse.quote(файл)))
     заголовки = {"User-Agent": "quiz10-ci",
                  "Authorization": "Bearer " + токен,
                  "Content-Type": "application/json"}
-    sha = None
-    try:
-        спросить = urllib.request.Request(
-            адрес + "?ref=" + urllib.parse.quote(ветка), headers=заголовки)
-        with urllib.request.urlopen(спросить, timeout=60) as о:
-            sha = json.load(о).get("sha")
-    except Exception:
-        pass                        # файла нет — значит создаём новый
-    тело = {"message": подпись, "branch": ветка,
-            "content": base64.b64encode(данные).decode()}
-    if sha:
-        тело["sha"] = sha
-    запрос = urllib.request.Request(адрес, data=json.dumps(тело).encode(),
-                                    method="PUT", headers=заголовки)
-    urllib.request.urlopen(запрос, timeout=300)
+    for попытка in range(1, попыток + 1):
+        sha = None
+        try:
+            спросить = urllib.request.Request(
+                адрес + "?ref=" + urllib.parse.quote(ветка), headers=заголовки)
+            with urllib.request.urlopen(спросить, timeout=60) as о:
+                sha = json.load(о).get("sha")
+        except Exception:
+            pass                    # файла нет — значит создаём новый
+        тело = {"message": подпись, "branch": ветка,
+                "content": base64.b64encode(данные).decode()}
+        if sha:
+            тело["sha"] = sha
+        запрос = urllib.request.Request(адрес, data=json.dumps(тело).encode(),
+                                        method="PUT", headers=заголовки)
+        try:
+            urllib.request.urlopen(запрос, timeout=300)
+            return
+        except Exception as е:
+            код = getattr(е, "code", None)
+            можно_ещё = код is None or код >= 500 or код == 409
+            if not можно_ещё or попытка == попыток:
+                raise
+            пауза = 3 * попытка
+            print("   GitHub ответил %s — жду %d с и пробую ещё раз (%d из %d)"
+                  % (код or е, пауза, попытка, попыток))
+            time.sleep(пауза)
 
 
 def где_взять():
