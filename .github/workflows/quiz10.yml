@@ -293,13 +293,16 @@ jobs:
       # телефон читает ровно тот файл, которого и так ждёт.
       - name: Выложить ролик
         id: release
-        if: success() && steps.run.outputs.stage == 'сборка'
+        if: success() && (steps.run.outputs.stage == 'сборка'
+            || steps.run.outputs.stage == 'пары-сборка')
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           FILE: ${{ steps.run.outputs.file }}
           NAME: ${{ steps.run.outputs.name }}
           # Имя переменной латиницей: bash кириллицу в именах не берёт.
-          ANSWER: ${{ steps.data.outputs.dir }}/ответы10/${{ steps.run.outputs.id }}.сборка.json
+          # Имя ответа зависит от этапа: у викторины «сборка», у теста для
+          # пар «пары-сборка». Берём этап, а не жёсткое слово.
+          ANSWER: ${{ steps.data.outputs.dir }}/ответы10/${{ steps.run.outputs.id }}.${{ steps.run.outputs.stage }}.json
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::warning::Секрет RELEASE_TOKEN не задан — ролик остался только артефактом."
@@ -352,7 +355,8 @@ jobs:
           exit 1
 
       - name: Отдать ролик файлом
-        if: success() && steps.run.outputs.stage == 'сборка'
+        if: success() && (steps.run.outputs.stage == 'сборка'
+            || steps.run.outputs.stage == 'пары-сборка')
         uses: actions/upload-artifact@v4
         with:
           name: rolik10
