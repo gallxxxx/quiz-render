@@ -208,8 +208,11 @@ jobs:
           # faster-whisper тянет за собой ctranslate2 и onnxruntime —
           # больше сотни мегабайт. Слушает речь только «расшифровка»,
           # остальным этапам это лишнее.
+          # Речь слушают ДВА этапа: «расшифровка» у викторины и
+          # «пары-разбор» у теста для пар. Обоим нужен запасной
+          # Whisper на случай, если нейросеть не ответит.
           req=викторина10/requirements.txt
-          if [ "$STAGE" != "расшифровка" ]; then
+          if [ "$STAGE" != "расшифровка" ] && [ "$STAGE" != "пары-разбор" ]; then
             grep -v '^[[:space:]]*faster-whisper' "$req" > /tmp/req10.txt
             req=/tmp/req10.txt
           fi
@@ -221,6 +224,7 @@ jobs:
       # распаковывались впустую.
       - name: Кэш модели распознавания
         if: steps.job.outputs.stage == 'расшифровка'
+          || steps.job.outputs.stage == 'пары-разбор'
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
