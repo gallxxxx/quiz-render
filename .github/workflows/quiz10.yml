@@ -358,6 +358,71 @@ jobs:
           echo "::error::Ответ не удалось вернуть в репозиторий."
           exit 1
 
+      # Ролики копятся вечно, если их не убирать. У «Это или то» такой
+      # шаг был с самого начала, а у викторины его не было вовсе — и к
+      # восемнадцати релизам это заметили. Порог ДЕСЯТЬ, а не семь,
+      # которые человек видит на экране: списки у Вики и подруги
+      # разные, и запас спасает от «подруга собрала три подряд — у Вики
+      # ссылки протухли».
+      #
+      # Уборка не имеет права ронять сборку: ролик уже готов и выложен.
+      - name: Убрать старые ролики
+        if: success() && (steps.run.outputs.stage == 'сборка'
+            || steps.run.outputs.stage == 'пары-сборка')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Без RELEASE_TOKEN убирать нечем — пропускаю."
+            exit 0
+          fi
+          # Имена переменных латиницей: bash кириллицу в них не берёт.
+          keep=10
+          # Сортируем по ИМЕНИ файла: оно начинается с даты, и это
+          # надёжнее даты релиза — та однажды разошлась с порядком.
+          old=$(gh release list --repo gallxxxx/quiz --limit 100 \
+                --json tagName,name \
+                --jq "sort_by(.name) | reverse | .[$keep:][] | .tagName")
+          if [ -z "$old" ]; then
+            echo "Старых роликов нет, убирать нечего."
+            exit 0
+          fi
+          for tag in $old; do
+            echo "Убираю: $tag"
+            gh release delete "$tag" --repo gallxxxx/quiz --yes --cleanup-tag || true
+          done
+
+      # Задания и ответы лежат в главной ветке и тоже копятся. Казалось
+      # бы мелочь, но в задании на сборку ездят СВОИ ФОТОГРАФИИ в
+      # base64 — это и вес, и лишний след. Держим двадцать последних
+      # выпусков: восьми в списке у человека хватает с запасом.
+      - name: Убрать старые задания и ответы
+        if: success() && steps.job.outputs.skip != 'yes'
+        continue-on-error: true
+        working-directory: ${{ steps.data.outputs.dir }}
+        run: |
+          keep=20
+          ids=$(ls задания10 ответы10 2>/dev/null \
+                | cut -d. -f1 | grep -E '^[0-9]{4}-' \
+                | sort -u | sort -r | tail -n +$((keep + 1)))
+          if [ -z "$ids" ]; then
+            echo "Старых заданий нет."
+            exit 0
+          fi
+          for id in $ids; do
+            rm -f "задания10/$id."*.json "ответы10/$id."*.json
+            echo "Убираю выпуск $id"
+          done
+          git add -A задания10 ответы10 || true
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -q -m "Уборка: выпуски старше последних $keep"
+          for i in 1 2 3; do
+            git pull --rebase --quiet && git push --quiet && exit 0
+            sleep 5
+          done
+          echo "::warning::Уборку заданий отправить не вышло."
+
       - name: Отдать ролик файлом
         if: success() && (steps.run.outputs.stage == 'сборка'
             || steps.run.outputs.stage == 'пары-сборка')
