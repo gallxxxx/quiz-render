@@ -79,10 +79,21 @@ jobs:
           # передавать некуда: соберём здесь же. Медленнее вдвое, но
           # РАБОТАЕТ ВСЕГДА, и это важнее скорости.
           BUILD_REPO: ${{ vars.BUILD_REPO }}
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # DISPATCH_TOKEN заведён не был, и передача молча не работала
+          # НИ РАЗУ: в журнале стояло безобидное «передавать некуда»,
+          # а все сборки шли на слабой машине закрытого репозитория —
+          # вдвое дольше, чем могли бы. Поэтому пробуем и RELEASE_TOKEN:
+          # он в этом репозитории есть и, если у него хватает прав,
+          # передача заработает сама, без единого нового секрета.
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN || secrets.RELEASE_TOKEN }}
         run: |
-          if [ -z "$BUILD_REPO" ] || [ -z "$GH_TOKEN" ]; then
-            echo "Передавать некуда — соберу здесь."
+          if [ -z "$BUILD_REPO" ]; then
+            echo "Куда передавать не сказано (нет BUILD_REPO) — соберу здесь."
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::Нет ни DISPATCH_TOKEN, ни RELEASE_TOKEN —"
+            echo "::warning::собираю на слабой машине, это вдвое дольше."
             exit 0
           fi
           rel=$(git -c core.quotepath=false show --name-only --diff-filter=AM \
@@ -102,7 +113,10 @@ jobs:
             echo "done=yes" >> "$GITHUB_OUTPUT"
           else
             # Не вышло — не беда и не повод терять выпуск: соберём сами.
-            echo "::warning::Передать не удалось — собираю здесь."
+            # Но скажем об этом громко: «вдвое дольше» стоит того, чтобы
+            # человек однажды это заметил и завёл нормальный токен.
+            echo "::warning::Передать не удалось (у токена мало прав?) —"
+            echo "::warning::собираю здесь, это вдвое дольше."
           fi
 
   quiz10:
@@ -313,10 +327,47 @@ jobs:
             exit 0
           fi
           tag="r${{ github.run_id }}"
-          gh release create "$tag" "$FILE" \
-            --repo gallxxxx/quiz \
-            --title "$NAME" \
-            --notes "Собрано автоматически, запуск ${{ github.run_number }} (id ${{ github.run_id }})."
+          # С ПОВТОРАМИ — по той же причине, по которой они есть в ci10.py,
+          # и с одной поправкой, которая там не нужна. 13 сентября GitHub
+          # ответил «HTTP 500» на создание релиза — а релиз при этом СОЗДАЛ:
+          # в gallxxxx/quiz остался черновик r34750238480 без файла, шаг
+          # упал, и готовый ролик на 98 МБ уехал вместе с машиной. Ролик
+          # собирается шесть минут; терять его из-за чужой икоты нельзя.
+          #
+          # Поэтому перед каждой попыткой СМОТРИМ, что уже есть. Если
+          # черновик от прошлой попытки на месте — дозаливаем в него файл
+          # и публикуем, а не создаём второй релиз с тем же именем.
+          ok=no
+          for try in 1 2 3 4 5 6; do
+            if gh release view "$tag" --repo gallxxxx/quiz >/dev/null 2>&1; then
+              if gh release upload "$tag" "$FILE" \
+                   --repo gallxxxx/quiz --clobber \
+                 && gh release edit "$tag" --repo gallxxxx/quiz --draft=false
+              then
+                ok=yes
+              fi
+            elif gh release create "$tag" "$FILE" \
+                   --repo gallxxxx/quiz \
+                   --title "$NAME" \
+                   --notes "Собрано автоматически, запуск ${{ github.run_number }} (id ${{ github.run_id }})."
+            then
+              ok=yes
+            fi
+            if [ "$ok" = yes ]; then
+              break
+            fi
+            if [ "$try" -eq 6 ]; then
+              break
+            fi
+            # Ждём подолгу: в тот раз GitHub икал около полуминуты.
+            pause=$((5 * try))
+            echo "GitHub не принял релиз — жду $pause с и пробую ещё раз ($try из 6)"
+            sleep "$pause"
+          done
+          if [ "$ok" != yes ]; then
+            echo "::error::GitHub шесть раз подряд не принял релиз."
+            exit 1
+          fi
           link=$(gh release view "$tag" --repo gallxxxx/quiz \
                  --json assets -q '.assets[0].url' || true)
           if [ -n "$link" ] && [ -f "$ANSWER" ]; then
